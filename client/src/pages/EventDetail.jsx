@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import api from '../utils/axios';
+import api, { getErrorMessage } from '../utils/axios';
+import useCountdown from '../hooks/useCountdown';
 import { AuthContext } from '../context/AuthContext';
 import { FaCalendarAlt, FaMapMarkerAlt, FaChair, FaMoneyBillWave } from 'react-icons/fa';
 
@@ -15,6 +16,7 @@ const EventDetail = () => {
     const [showOTP, setShowOTP] = useState(false);
     const [error, setError] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
+    const [cooldown, startCooldown] = useCountdown();
 
     useEffect(() => {
         const fetchEvent = async () => {
@@ -30,6 +32,14 @@ const EventDetail = () => {
         fetchEvent();
     }, [id]);
 
+    const sendOtp = async () => {
+        await api.post('/bookings/send-otp');
+        setShowOTP(true);
+        setOtp('');
+        startCooldown(30);
+        setSuccessMsg('OTP sent to your email (check spam too). Enter it below to confirm.');
+    };
+
     const handleBooking = async () => {
         if (!user) {
             navigate('/login');
@@ -41,20 +51,27 @@ const EventDetail = () => {
 
         try {
             if (!showOTP) {
-                await api.post('/bookings/send-otp');
-                setShowOTP(true);
-                setSuccessMsg('OTP sent to your email. Please verify to confirm booking.');
+                await sendOtp();
             } else {
-                await api.post('/bookings', { eventId: event._id, otp });
+                await api.post('/bookings', { eventId: event._id, otp: otp.trim() });
                 setSuccessMsg('Booking requested! Awaiting admin confirmation.');
                 setShowOTP(false);
-                // Update local seats count dynamically after booking
-                setEvent({ ...event, availableSeats: event.availableSeats - 1 });
+                setOtp('');
+                // Seats are only deducted when the admin confirms, so availableSeats is NOT changed here.
             }
         } catch (err) {
-            setError(err.response?.data?.message || 'Booking failed');
+            setError(getErrorMessage(err, 'Booking failed'));
         } finally {
             setBookingLoading(false);
+        }
+    };
+
+    const handleResend = async () => {
+        setError('');
+        try {
+            await sendOtp();
+        } catch (err) {
+            setError(getErrorMessage(err, 'Could not resend OTP'));
         }
     };
 
@@ -139,15 +156,25 @@ const EventDetail = () => {
                                     placeholder="6-digit code"
                                     className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-gray-700 transition shadow-sm font-bold tracking-widest text-center text-lg"
                                     value={otp}
-                                    onChange={(e) => setOtp(e.target.value)}
-                                    maxLength="6"
+                                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                                    maxLength={6}
+                                    inputMode="numeric"
+                                    autoComplete="one-time-code"
                                 />
+                                <button
+                                    type="button"
+                                    onClick={handleResend}
+                                    disabled={cooldown > 0 || bookingLoading}
+                                    className="mt-2 text-sm font-semibold text-gray-700 hover:underline disabled:text-gray-400 disabled:no-underline"
+                                >
+                                    {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+                                </button>
                             </div>
                         )}
 
                         <button
                             onClick={handleBooking}
-                            disabled={isSoldOut || bookingLoading || (showOTP && !otp)}
+                            disabled={isSoldOut || bookingLoading || (showOTP && otp.length !== 6)}
                             className={`w-full py-4 px-6 rounded-xl font-bold text-lg transition shadow-lg ${isSoldOut || (successMsg && !showOTP)
                                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                                 : 'bg-gray-900 hover:bg-black text-white hover:shadow-xl hover:-translate-y-1'

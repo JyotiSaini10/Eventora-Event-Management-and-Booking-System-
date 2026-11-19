@@ -1,6 +1,7 @@
 import React, { useState, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
+import useCountdown from '../hooks/useCountdown';
 
 const Login = () => {
     const [email, setEmail] = useState('');
@@ -8,34 +9,50 @@ const Login = () => {
     const [otp, setOtp] = useState('');
     const [showOTP, setShowOTP] = useState(false);
     const [error, setError] = useState('');
+    const [info, setInfo] = useState('');
     const [loading, setLoading] = useState(false);
+    const [cooldown, startCooldown] = useCountdown();
 
-    const { login, verifyOTP } = useContext(AuthContext);
+    const { login, verifyOTP, resendOTP } = useContext(AuthContext);
     const navigate = useNavigate();
+
+    const goHome = (data) => navigate(data.role === 'admin' ? '/admin' : '/dashboard');
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
         setError('');
+        setInfo('');
         try {
-            if (!showOTP) {
-                const data = await login(email, password);
-                if (data.role === 'admin') navigate('/admin');
-                else navigate('/dashboard');
-            } else {
-                const data = await verifyOTP(email, otp);
-                if (data.role === 'admin') navigate('/admin');
-                else navigate('/dashboard');
-            }
+            const data = showOTP ? await verifyOTP(email, otp.trim()) : await login(email, password);
+            goHome(data);
         } catch (err) {
-            if (err.needsVerification) {
+            if (err && err.needsVerification) {
+                // Account exists but is not verified yet -> switch to the OTP box
                 setShowOTP(true);
-                setError('Account not verified. A new OTP has been sent to your email.');
+                if (err.emailSent) {
+                    setInfo('Account not verified. We sent a 6-digit code to your email (check spam too).');
+                    startCooldown(30);
+                } else {
+                    setError(err.message); // email really failed - say so, user can press "Resend"
+                }
             } else {
-                setError(err.message || err);
+                setError(typeof err === 'string' ? err : err?.message || 'Something went wrong');
             }
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleResend = async () => {
+        setError('');
+        setInfo('');
+        try {
+            await resendOTP(email);
+            setInfo('A new code has been sent to your email.');
+            startCooldown(30);
+        } catch (err) {
+            setError(err);
         }
     };
 
@@ -47,6 +64,7 @@ const Login = () => {
             </div>
 
             {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg mb-6 text-center shadow-inner border border-red-100">{error}</div>}
+            {info && <div className="bg-green-50 text-green-700 p-3 rounded-lg mb-6 text-center border border-green-200">{info}</div>}
 
             <form onSubmit={handleSubmit} className="space-y-6">
                 {!showOTP ? (
@@ -56,6 +74,7 @@ const Login = () => {
                             <input
                                 type="email"
                                 required
+                                autoComplete="email"
                                 className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-gray-700 focus:border-gray-700 transition shadow-sm"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
@@ -66,6 +85,7 @@ const Login = () => {
                             <input
                                 type="password"
                                 required
+                                autoComplete="current-password"
                                 className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-gray-700 focus:border-gray-700 transition shadow-sm"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
@@ -77,19 +97,29 @@ const Login = () => {
                         <label className="block text-sm font-semibold text-gray-700 mb-2">Verification Code (OTP)</label>
                         <input
                             type="text"
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
                             required
                             placeholder="6-digit code"
                             className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-gray-700 transition shadow-sm font-bold tracking-widest text-center text-lg"
                             value={otp}
-                            onChange={(e) => setOtp(e.target.value)}
-                            maxLength="6"
+                            onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                            maxLength={6}
                         />
+                        <button
+                            type="button"
+                            onClick={handleResend}
+                            disabled={cooldown > 0}
+                            className="mt-3 text-sm font-semibold text-gray-700 hover:underline disabled:text-gray-400 disabled:no-underline"
+                        >
+                            {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+                        </button>
                     </div>
                 )}
                 <button
                     type="submit"
-                    disabled={loading}
-                    className="w-full bg-gray-900 text-white font-bold py-3 rounded-lg hover:bg-black focus:ring-4 focus:ring-gray-200 transition shadow-md"
+                    disabled={loading || (showOTP && otp.length !== 6)}
+                    className="w-full bg-gray-900 text-white font-bold py-3 rounded-lg hover:bg-black focus:ring-4 focus:ring-gray-200 transition shadow-md disabled:opacity-60"
                 >
                     {loading ? 'Processing...' : (showOTP ? 'Verify OTP & Log In' : 'Sign In')}
                 </button>
